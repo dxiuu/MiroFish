@@ -10,15 +10,33 @@ Zep检索工具服务
 
 import time
 import json
+import uuid
+import hashlib
 from typing import Dict, Any, List, Optional
 from dataclasses import dataclass, field
-
-from zep_cloud.client import Zep
 
 from ..config import Config
 from ..utils.logger import get_logger
 from ..utils.llm_client import LLMClient
-from ..utils.zep_paging import fetch_all_nodes, fetch_all_edges
+from ..utils.mem0_client import get_mem0_client
+
+
+def _name_to_uuid(name: str) -> str:
+    """Generate a deterministic UUID from an entity name (MD5-based)."""
+    return str(uuid.UUID(hashlib.md5(name.encode()).hexdigest()))
+
+
+def _parse_mem0_all(data) -> tuple:
+    """Parse Mem0 get_all() / search() response → (results, relations)."""
+    if isinstance(data, dict):
+        results = data.get("results") or []
+        relations = data.get("relations") or []
+    elif isinstance(data, list):
+        results = data
+        relations = []
+    else:
+        results, relations = [], []
+    return results, relations
 
 logger = get_logger('mirofish.zep_tools')
 
@@ -422,13 +440,15 @@ class ZepToolsService:
     RETRY_DELAY = 2.0
     
     def __init__(self, api_key: Optional[str] = None, llm_client: Optional[LLMClient] = None):
-        self.api_key = api_key or Config.ZEP_API_KEY
+        self.api_key = api_key or Config.MEM0_API_KEY
         if not self.api_key:
-            raise ValueError("ZEP_API_KEY 未配置")
-        
-        self.client = Zep(api_key=self.api_key)
+            raise ValueError("MEM0_KEY 未配置")
+
+        self.client = get_mem0_client()
         # LLM客户端用于InsightForge生成子问题
         self._llm_client = llm_client
+        # Cache: uuid → NodeInfo (populated by get_all_edges / search_graph)
+        self._uuid_node_cache: Dict[str, NodeInfo] = {}
         logger.info("ZepToolsService 初始化完成")
     
     @property
@@ -484,52 +504,64 @@ class ZepToolsService:
             SearchResult: 搜索结果
         """
         logger.info(f"图谱搜索: graph_id={graph_id}, query={query[:50]}...")
-        
-        # 尝试使用Zep Cloud Search API
+
         try:
-            search_results = self._call_with_retry(
-                func=lambda: self.client.graph.search(
-                    graph_id=graph_id,
-                    query=query,
-                    limit=limit,
-                    scope=scope,
-                    reranker="cross_encoder"
+            search_data = self._call_with_retry(
+                func=lambda: self.client.search(
+                    query,
+                    user_id=graph_id,
+                    limit=limit
                 ),
                 operation_name=f"图谱搜索(graph={graph_id})"
             )
-            
+
+            results, relations = _parse_mem0_all(search_data)
+
             facts = []
             edges = []
             nodes = []
-            
-            # 解析边搜索结果
-            if hasattr(search_results, 'edges') and search_results.edges:
-                for edge in search_results.edges:
-                    if hasattr(edge, 'fact') and edge.fact:
-                        facts.append(edge.fact)
-                    edges.append({
-                        "uuid": getattr(edge, 'uuid_', None) or getattr(edge, 'uuid', ''),
-                        "name": getattr(edge, 'name', ''),
-                        "fact": getattr(edge, 'fact', ''),
-                        "source_node_uuid": getattr(edge, 'source_node_uuid', ''),
-                        "target_node_uuid": getattr(edge, 'target_node_uuid', ''),
-                    })
-            
-            # 解析节点搜索结果
-            if hasattr(search_results, 'nodes') and search_results.nodes:
-                for node in search_results.nodes:
-                    nodes.append({
-                        "uuid": getattr(node, 'uuid_', None) or getattr(node, 'uuid', ''),
-                        "name": getattr(node, 'name', ''),
-                        "labels": getattr(node, 'labels', []),
-                        "summary": getattr(node, 'summary', ''),
-                    })
-                    # 节点摘要也算作事实
-                    if hasattr(node, 'summary') and node.summary:
-                        facts.append(f"[{node.name}]: {node.summary}")
-            
+
+            # 从记忆结果提取事实
+            for mem in results:
+                if isinstance(mem, dict):
+                    mem_text = mem.get("memory") or mem.get("text") or mem.get("content") or ""
+                    if mem_text:
+                        facts.append(mem_text)
+                elif isinstance(mem, str) and mem:
+                    facts.append(mem)
+
+            # 从关系结果提取边
+            for rel in relations:
+                if not isinstance(rel, dict):
+                    continue
+                src = rel.get("source") or rel.get("source_node") or ""
+                tgt = rel.get("target") or rel.get("destination") or rel.get("target_node") or ""
+                rel_name = rel.get("relationship") or rel.get("name") or ""
+                fact = rel.get("fact") or rel.get("description") or rel_name
+                rel_id = rel.get("id") or _name_to_uuid(f"{src}-{rel_name}-{tgt}")
+
+                if fact:
+                    facts.append(fact)
+
+                src_uuid = _name_to_uuid(src) if src else ""
+                tgt_uuid = _name_to_uuid(tgt) if tgt else ""
+
+                # Populate cache for get_node_detail()
+                if src and src_uuid not in self._uuid_node_cache:
+                    self._uuid_node_cache[src_uuid] = NodeInfo(uuid=src_uuid, name=src, labels=[], summary="", attributes={})
+                if tgt and tgt_uuid not in self._uuid_node_cache:
+                    self._uuid_node_cache[tgt_uuid] = NodeInfo(uuid=tgt_uuid, name=tgt, labels=[], summary="", attributes={})
+
+                edges.append({
+                    "uuid": str(rel_id),
+                    "name": rel_name,
+                    "fact": fact,
+                    "source_node_uuid": src_uuid,
+                    "target_node_uuid": tgt_uuid,
+                })
+
             logger.info(f"搜索完成: 找到 {len(facts)} 条相关事实")
-            
+
             return SearchResult(
                 facts=facts,
                 edges=edges,
@@ -537,10 +569,9 @@ class ZepToolsService:
                 query=query,
                 total_count=len(facts)
             )
-            
+
         except Exception as e:
-            logger.warning(f"Zep Search API失败，降级为本地搜索: {str(e)}")
-            # 降级：使用本地关键词匹配搜索
+            logger.warning(f"Mem0 Search API失败，降级为本地搜索: {str(e)}")
             return self._local_search(graph_id, query, limit, scope)
     
     def _local_search(
@@ -659,18 +690,33 @@ class ZepToolsService:
         """
         logger.info(f"获取图谱 {graph_id} 的所有节点...")
 
-        nodes = fetch_all_nodes(self.client, graph_id)
+        try:
+            data = self.client.get_all(user_id=graph_id)
+            _, relations = _parse_mem0_all(data)
+        except Exception as e:
+            logger.warning(f"get_all_nodes: Mem0 get_all 失败: {e}")
+            relations = []
 
-        result = []
-        for node in nodes:
-            node_uuid = getattr(node, 'uuid_', None) or getattr(node, 'uuid', None) or ""
-            result.append(NodeInfo(
-                uuid=str(node_uuid) if node_uuid else "",
-                name=node.name or "",
-                labels=node.labels or [],
-                summary=node.summary or "",
-                attributes=node.attributes or {}
-            ))
+        entity_names: set = set()
+        for rel in relations:
+            if isinstance(rel, dict):
+                src = rel.get("source") or rel.get("source_node") or ""
+                tgt = rel.get("target") or rel.get("destination") or rel.get("target_node") or ""
+                if src:
+                    entity_names.add(src)
+                if tgt:
+                    entity_names.add(tgt)
+
+        result = [
+            NodeInfo(
+                uuid=_name_to_uuid(name),
+                name=name,
+                labels=[],
+                summary="",
+                attributes={}
+            )
+            for name in entity_names
+        ]
 
         logger.info(f"获取到 {len(result)} 个节点")
         return result
@@ -688,26 +734,42 @@ class ZepToolsService:
         """
         logger.info(f"获取图谱 {graph_id} 的所有边...")
 
-        edges = fetch_all_edges(self.client, graph_id)
+        try:
+            data = self.client.get_all(user_id=graph_id)
+            _, relations = _parse_mem0_all(data)
+        except Exception as e:
+            logger.warning(f"get_all_edges: Mem0 get_all 失败: {e}")
+            relations = []
 
         result = []
-        for edge in edges:
-            edge_uuid = getattr(edge, 'uuid_', None) or getattr(edge, 'uuid', None) or ""
+        for rel in relations:
+            if not isinstance(rel, dict):
+                continue
+            src = rel.get("source") or rel.get("source_node") or ""
+            tgt = rel.get("target") or rel.get("destination") or rel.get("target_node") or ""
+            rel_name = rel.get("relationship") or rel.get("name") or ""
+            fact = rel.get("fact") or rel.get("description") or rel_name
+            rel_id = rel.get("id") or _name_to_uuid(f"{src}-{rel_name}-{tgt}")
+
+            src_uuid = _name_to_uuid(src) if src else ""
+            tgt_uuid = _name_to_uuid(tgt) if tgt else ""
+
             edge_info = EdgeInfo(
-                uuid=str(edge_uuid) if edge_uuid else "",
-                name=edge.name or "",
-                fact=edge.fact or "",
-                source_node_uuid=edge.source_node_uuid or "",
-                target_node_uuid=edge.target_node_uuid or ""
+                uuid=str(rel_id),
+                name=rel_name,
+                fact=fact,
+                source_node_uuid=src_uuid,
+                target_node_uuid=tgt_uuid,
+                source_node_name=src,
+                target_node_name=tgt,
             )
+            # Populate uuid→NodeInfo cache for get_node_detail()
+            if src and src_uuid not in self._uuid_node_cache:
+                self._uuid_node_cache[src_uuid] = NodeInfo(uuid=src_uuid, name=src, labels=[], summary="", attributes={})
+            if tgt and tgt_uuid not in self._uuid_node_cache:
+                self._uuid_node_cache[tgt_uuid] = NodeInfo(uuid=tgt_uuid, name=tgt, labels=[], summary="", attributes={})
 
-            # 添加时间信息
-            if include_temporal:
-                edge_info.created_at = getattr(edge, 'created_at', None)
-                edge_info.valid_at = getattr(edge, 'valid_at', None)
-                edge_info.invalid_at = getattr(edge, 'invalid_at', None)
-                edge_info.expired_at = getattr(edge, 'expired_at', None)
-
+            # Mem0 has no temporal data; all edges are active
             result.append(edge_info)
 
         logger.info(f"获取到 {len(result)} 条边")
@@ -724,26 +786,14 @@ class ZepToolsService:
             节点信息或None
         """
         logger.info(f"获取节点详情: {node_uuid[:8]}...")
-        
-        try:
-            node = self._call_with_retry(
-                func=lambda: self.client.graph.node.get(uuid_=node_uuid),
-                operation_name=f"获取节点详情(uuid={node_uuid[:8]}...)"
-            )
-            
-            if not node:
-                return None
-            
-            return NodeInfo(
-                uuid=getattr(node, 'uuid_', None) or getattr(node, 'uuid', ''),
-                name=node.name or "",
-                labels=node.labels or [],
-                summary=node.summary or "",
-                attributes=node.attributes or {}
-            )
-        except Exception as e:
-            logger.error(f"获取节点详情失败: {str(e)}")
-            return None
+
+        # Look up from cache populated by get_all_edges() / search_graph()
+        node = self._uuid_node_cache.get(node_uuid)
+        if node:
+            return node
+
+        logger.debug(f"节点 {node_uuid[:8]} 未在缓存中找到")
+        return None
     
     def get_node_edges(self, graph_id: str, node_uuid: str) -> List[EdgeInfo]:
         """
@@ -793,17 +843,30 @@ class ZepToolsService:
             符合类型的实体列表
         """
         logger.info(f"获取类型为 {entity_type} 的实体...")
-        
+
+        # Mem0 nodes have no labels; use semantic search to classify entities
         all_nodes = self.get_all_nodes(graph_id)
-        
-        filtered = []
-        for node in all_nodes:
-            # 检查labels是否包含指定类型
-            if entity_type in node.labels:
-                filtered.append(node)
-        
-        logger.info(f"找到 {len(filtered)} 个 {entity_type} 类型的实体")
-        return filtered
+        node_name_map = {n.name.lower(): n for n in all_nodes}
+
+        matched: List[NodeInfo] = []
+        try:
+            search_data = self.client.search(entity_type, user_id=graph_id, limit=50)
+            results, _ = _parse_mem0_all(search_data)
+            for mem in results:
+                mem_text = ""
+                if isinstance(mem, dict):
+                    mem_text = mem.get("memory") or mem.get("text") or mem.get("content") or ""
+                elif isinstance(mem, str):
+                    mem_text = mem
+                for name_lower, node in node_name_map.items():
+                    if name_lower and name_lower in mem_text.lower():
+                        if node not in matched:
+                            matched.append(node)
+        except Exception as e:
+            logger.warning(f"按类型搜索 {entity_type} 失败: {e}")
+
+        logger.info(f"找到 {len(matched)} 个 {entity_type} 类型的实体")
+        return matched
     
     def get_entity_summary(
         self, 
@@ -921,16 +984,11 @@ class ZepToolsService:
         # 获取所有实体节点
         all_nodes = self.get_all_nodes(graph_id)
         
-        # 筛选有实际类型的实体（非纯Entity节点）
-        entities = []
-        for node in all_nodes:
-            custom_labels = [l for l in node.labels if l not in ["Entity", "Node"]]
-            if custom_labels:
-                entities.append({
-                    "name": node.name,
-                    "type": custom_labels[0],
-                    "summary": node.summary
-                })
+        # Include all entities (Mem0 nodes have no type labels)
+        entities = [
+            {"name": node.name, "type": "Entity", "summary": node.summary}
+            for node in all_nodes
+        ]
         
         return {
             "simulation_requirement": simulation_requirement,
