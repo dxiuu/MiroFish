@@ -35,6 +35,7 @@ class Config:
     # Zep配置 — 使用 ZEP_API_URL 指向自托管实例，ZEP_API_KEY 可选
     ZEP_API_KEY = os.environ.get('ZEP_API_KEY')
     ZEP_API_URL = os.environ.get('ZEP_API_URL')  # e.g. http://localhost:8000
+    ZEP_EPISODE_WAIT_TIME_SECONDS = int(os.environ.get('ZEP_EPISODE_WAIT_TIME_SECONDS', '30'))
     
     # 文件上传配置
     MAX_CONTENT_LENGTH = 50 * 1024 * 1024  # 50MB
