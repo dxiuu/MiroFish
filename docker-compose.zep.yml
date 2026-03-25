@@ -1,0 +1,43 @@
+services:
+  zep:
+    image: ghcr.io/getzep/zep:latest
+    container_name: mirofish-zep
+    environment:
+      - ZEP_STORE_POSTGRES_DSN=postgres://zep:zep@zep-postgres:5432/zep?sslmode=disable
+      - ZEP_AUTH_REQUIRED=false
+      # Zep uses an LLM internally for knowledge graph extraction.
+      # Point it at the same LLM you use for MiroFish.
+      - ZEP_LLM_SERVICE=openai
+      - ZEP_OPENAI_API_KEY=${LLM_API_KEY}
+      - ZEP_OPENAI_API_BASE=${LLM_BASE_URL}
+      - ZEP_NLP_SERVER_URL=http://zep-nlp:5557
+    ports:
+      - "8000:8000"
+    depends_on:
+      zep-postgres:
+        condition: service_healthy
+    restart: unless-stopped
+
+  zep-nlp:
+    image: ghcr.io/getzep/zep-nlp-server:latest
+    container_name: mirofish-zep-nlp
+    restart: unless-stopped
+
+  zep-postgres:
+    image: postgres:15
+    container_name: mirofish-zep-postgres
+    environment:
+      - POSTGRES_USER=zep
+      - POSTGRES_PASSWORD=zep
+      - POSTGRES_DB=zep
+    volumes:
+      - zep_postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U zep"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
+volumes:
+  zep_postgres_data:

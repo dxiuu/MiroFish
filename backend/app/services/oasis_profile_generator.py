@@ -16,9 +16,9 @@ from dataclasses import dataclass, field
 from datetime import datetime
 
 from openai import OpenAI
-from zep_cloud.client import Zep
 
 from ..config import Config
+from ..utils.zep_client import make_zep_client
 from ..utils.logger import get_logger
 from .zep_entity_reader import EntityNode, ZepEntityReader
 
@@ -198,13 +198,12 @@ class OasisProfileGenerator:
         )
         
         # Zep客户端用于检索丰富上下文
-        self.zep_api_key = zep_api_key or Config.ZEP_API_KEY
         self.zep_client = None
         self.graph_id = graph_id
-        
-        if self.zep_api_key:
+
+        if zep_api_key or Config.ZEP_API_KEY or Config.ZEP_API_URL:
             try:
-                self.zep_client = Zep(api_key=self.zep_api_key)
+                self.zep_client = make_zep_client(api_key=zep_api_key)
             except Exception as e:
                 logger.warning(f"Zep客户端初始化失败: {e}")
     
