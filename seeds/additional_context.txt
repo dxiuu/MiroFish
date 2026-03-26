@@ -1,0 +1,34 @@
+## Kalshi Market Structure
+
+Contract: "Who will leave Trump's Cabinet next?" on Kalshi (CFTC-regulated). $2.1M volume across 23 sub-markets. Each sub-market settles YES/NO independently (not zero-sum). Current prices: Chavez-DeRemer 59c, Bondi 49c, Hegseth 45c, Gabbard 45c, RFK Jr ~22c, Rubio ~18c, Bessent ~14c, others 5-12c.
+
+## Trading Strategy to Evaluate: Overshoot-and-Fade
+
+When breaking news causes a 10%+ price move in any Cabinet sub-market within a 30-minute window, enter a counter-position assuming 60-70% mean reversion within 4-6 hours. Empirically, political news causes initial overreaction of 8-15% beyond fair value.
+
+## Desired Agent Population Distribution
+
+- DC insider journalists: 15% of agents — fastest reactors, wire-service-driven, break news that moves markets
+- Political analysts: 20% — slower, prior-anchored, reference historical base rates, publish calibrated estimates
+- Social media momentum traders: 25% — fastest Kalshi traders, react to Twitter headlines not articles, overshoot causers, hold 15 min to 2 hours
+- Mean-reversion arb traders: 20% — fade overshoots, monitor price vs base rates, enter after momentum spike, hold 2-8 hours
+- Cross-market spillover traders: 10% — watch correlation between sub-markets, trade when one member moves 10%+ and correlated members lag
+- Noise traders: 10% — reactive to social media sentiment, low sophistication, amplify momentum
+
+## Information Cascade Pattern
+
+1. Wire service breaks news (Reuters/AP) -> political Twitter within 5 min
+2. DC insider journalists amplify -> prediction market Twitter reacts within 15 min
+3. Momentum traders push Kalshi price -> cable news picks up within 30 min
+4. Reddit amplifies -> retail traders follow momentum within 45 min
+5. Analysts and arb traders review -> counter-narrative begins within 1-2 hours
+6. Institutional analysis published -> mean reversion begins within 3-6 hours
+7. Follow-up reporting -> price stabilizes at new equilibrium
+
+## Cross-Market Correlation
+
+Cabinet sub-markets are positively correlated. "Loyalty risk" members (Chavez-DeRemer, Gabbard) show highest correlation (~0.4-0.5). "Scandal risk" members (Hegseth) correlate moderately with others (~0.3). When one sub-market moves 10%+, correlated sub-markets follow within 30-60 minutes.
+
+## Signal Decay
+
+Political drama signals have a 2-6 hour effective window. After 6 hours, the signal is largely priced in. The sharpest price movement occurs in the first 30 minutes. Mean reversion traders should target the 1-4 hour window post-event for entry.
