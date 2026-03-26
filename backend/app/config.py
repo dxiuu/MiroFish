@@ -31,11 +31,21 @@ class Config:
     LLM_API_KEY = os.environ.get('LLM_API_KEY')
     LLM_BASE_URL = os.environ.get('LLM_BASE_URL', 'https://api.openai.com/v1')
     LLM_MODEL_NAME = os.environ.get('LLM_MODEL_NAME', 'gpt-4o-mini')
+    LLM_FALLBACK_MODEL = os.environ.get('LLM_FALLBACK_MODEL')
     
     # Zep配置 — 使用 ZEP_API_URL 指向自托管实例，ZEP_API_KEY 可选
     ZEP_API_KEY = os.environ.get('ZEP_API_KEY')
     ZEP_API_URL = os.environ.get('ZEP_API_URL')  # e.g. http://localhost:8000
     ZEP_EPISODE_WAIT_TIME_SECONDS = int(os.environ.get('ZEP_EPISODE_WAIT_TIME_SECONDS', '30'))
+
+    # Graph backend selection
+    GRAPH_BACKEND = os.environ.get('GRAPH_BACKEND', 'zep')  # 'zep' or 'graphiti'
+
+    # Graphiti + Neo4j configuration (used when GRAPH_BACKEND=graphiti)
+    GRAPHITI_NEO4J_URI = os.environ.get('GRAPHITI_NEO4J_URI', 'bolt://localhost:7687')
+    GRAPHITI_NEO4J_USER = os.environ.get('GRAPHITI_NEO4J_USER', 'neo4j')
+    GRAPHITI_NEO4J_PASSWORD = os.environ.get('GRAPHITI_NEO4J_PASSWORD', '')
+    GRAPHITI_EMBEDDER_MODEL = os.environ.get('GRAPHITI_EMBEDDER_MODEL', 'text-embedding-3-small')
     
     # 文件上传配置
     MAX_CONTENT_LENGTH = 50 * 1024 * 1024  # 50MB
@@ -71,7 +81,11 @@ class Config:
         errors = []
         if not cls.LLM_API_KEY:
             errors.append("LLM_API_KEY 未配置")
-        if not cls.ZEP_API_KEY and not cls.ZEP_API_URL:
-            errors.append("ZEP_API_KEY 或 ZEP_API_URL 未配置")
+        if cls.GRAPH_BACKEND == 'graphiti':
+            if not cls.GRAPHITI_NEO4J_PASSWORD:
+                errors.append("GRAPHITI_NEO4J_PASSWORD 未配置")
+        else:
+            if not cls.ZEP_API_KEY and not cls.ZEP_API_URL:
+                errors.append("ZEP_API_KEY 或 ZEP_API_URL 未配置")
         return errors
 

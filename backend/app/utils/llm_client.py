@@ -5,10 +5,14 @@ LLM客户端封装
 
 import json
 import re
+import time
 from typing import Optional, Dict, Any, List
-from openai import OpenAI
+from openai import OpenAI, APIStatusError
 
 from ..config import Config
+from .logger import get_logger
+
+logger = get_logger('mirofish.llm_client')
 
 
 class LLMClient:
@@ -23,10 +27,11 @@ class LLMClient:
         self.api_key = api_key or Config.LLM_API_KEY
         self.base_url = base_url or Config.LLM_BASE_URL
         self.model = model or Config.LLM_MODEL_NAME
-        
+        self.fallback_model = Config.LLM_FALLBACK_MODEL
+
         if not self.api_key:
             raise ValueError("LLM_API_KEY 未配置")
-        
+
         self.client = OpenAI(
             api_key=self.api_key,
             base_url=self.base_url
@@ -57,11 +62,29 @@ class LLMClient:
             "temperature": temperature,
             "max_tokens": max_tokens,
         }
-        
+
         if response_format:
             kwargs["response_format"] = response_format
-        
-        response = self.client.chat.completions.create(**kwargs)
+
+        max_retries = 3
+        for attempt in range(max_retries + 1):
+            try:
+                response = self.client.chat.completions.create(**kwargs)
+                break
+            except APIStatusError as e:
+                if e.status_code == 503:
+                    if attempt < max_retries:
+                        wait = 2 ** attempt
+                        logger.warning(f"Gemini 503, retry {attempt + 1}/{max_retries} in {wait}s")
+                        time.sleep(wait)
+                        continue
+                    if self.fallback_model:
+                        logger.warning(f"Gemini 503 after {max_retries} retries, falling back to {self.fallback_model}")
+                        kwargs["model"] = self.fallback_model
+                        response = self.client.chat.completions.create(**kwargs)
+                        break
+                raise
+
         content = response.choices[0].message.content
         # 部分模型（如MiniMax M2.5）会在content中包含<think>思考内容，需要移除
         content = re.sub(r'<think>[\s\S]*?</think>', '', content).strip()

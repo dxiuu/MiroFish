@@ -16,8 +16,7 @@ from dataclasses import dataclass, field
 from ..config import Config
 from ..utils.logger import get_logger
 from ..utils.llm_client import LLMClient
-from ..utils.zep_client import make_zep_client
-from ..utils.zep_paging import fetch_all_nodes, fetch_all_edges
+from ..utils.graph_client import make_graph_client
 
 logger = get_logger('mirofish.zep_tools')
 
@@ -421,7 +420,7 @@ class ZepToolsService:
     RETRY_DELAY = 2.0
     
     def __init__(self, api_key: Optional[str] = None, llm_client: Optional[LLMClient] = None):
-        self.client = make_zep_client(api_key=api_key)
+        self.client = make_graph_client()
         # LLM客户端用于InsightForge生成子问题
         self._llm_client = llm_client
         logger.info("ZepToolsService 初始化完成")
@@ -480,51 +479,48 @@ class ZepToolsService:
         """
         logger.info(f"图谱搜索: graph_id={graph_id}, query={query[:50]}...")
         
-        # 尝试使用Zep Cloud Search API
+        # 使用图谱客户端搜索
         try:
             search_results = self._call_with_retry(
-                func=lambda: self.client.graph.search(
+                func=lambda: self.client.search(
                     graph_id=graph_id,
                     query=query,
-                    limit=limit,
-                    scope=scope,
-                    reranker="cross_encoder"
+                    limit=limit
                 ),
                 operation_name=f"图谱搜索(graph={graph_id})"
             )
-            
+
             facts = []
             edges = []
             nodes = []
-            
-            # 解析边搜索结果
+
+            # 解析搜索结果
             if hasattr(search_results, 'edges') and search_results.edges:
                 for edge in search_results.edges:
-                    if hasattr(edge, 'fact') and edge.fact:
-                        facts.append(edge.fact)
+                    if edge.get('fact'):
+                        facts.append(edge['fact'])
                     edges.append({
-                        "uuid": getattr(edge, 'uuid_', None) or getattr(edge, 'uuid', ''),
-                        "name": getattr(edge, 'name', ''),
-                        "fact": getattr(edge, 'fact', ''),
-                        "source_node_uuid": getattr(edge, 'source_node_uuid', ''),
-                        "target_node_uuid": getattr(edge, 'target_node_uuid', ''),
+                        "uuid": edge.get('uuid', ''),
+                        "name": edge.get('name', ''),
+                        "fact": edge.get('fact', ''),
+                        "source_node_uuid": edge.get('source_node_uuid', ''),
+                        "target_node_uuid": edge.get('target_node_uuid', ''),
                     })
-            
-            # 解析节点搜索结果
+
             if hasattr(search_results, 'nodes') and search_results.nodes:
                 for node in search_results.nodes:
                     nodes.append({
-                        "uuid": getattr(node, 'uuid_', None) or getattr(node, 'uuid', ''),
-                        "name": getattr(node, 'name', ''),
-                        "labels": getattr(node, 'labels', []),
-                        "summary": getattr(node, 'summary', ''),
+                        "uuid": node.get('uuid', ''),
+                        "name": node.get('name', ''),
+                        "labels": node.get('labels', []),
+                        "summary": node.get('summary', ''),
                     })
                     # 节点摘要也算作事实
-                    if hasattr(node, 'summary') and node.summary:
-                        facts.append(f"[{node.name}]: {node.summary}")
-            
+                    if node.get('summary'):
+                        facts.append(f"[{node.get('name', '')}]: {node['summary']}")
+
             logger.info(f"搜索完成: 找到 {len(facts)} 条相关事实")
-            
+
             return SearchResult(
                 facts=facts,
                 edges=edges,
@@ -532,9 +528,9 @@ class ZepToolsService:
                 query=query,
                 total_count=len(facts)
             )
-            
+
         except Exception as e:
-            logger.warning(f"Zep Search API失败，降级为本地搜索: {str(e)}")
+            logger.warning(f"图谱搜索失败，降级为本地搜索: {str(e)}")
             # 降级：使用本地关键词匹配搜索
             return self._local_search(graph_id, query, limit, scope)
     
@@ -654,17 +650,16 @@ class ZepToolsService:
         """
         logger.info(f"获取图谱 {graph_id} 的所有节点...")
 
-        nodes = fetch_all_nodes(self.client, graph_id)
+        nodes = self.client.get_all_nodes(graph_id)
 
         result = []
         for node in nodes:
-            node_uuid = getattr(node, 'uuid_', None) or getattr(node, 'uuid', None) or ""
             result.append(NodeInfo(
-                uuid=str(node_uuid) if node_uuid else "",
-                name=node.name or "",
-                labels=node.labels or [],
-                summary=node.summary or "",
-                attributes=node.attributes or {}
+                uuid=node.get("uuid", ""),
+                name=node.get("name", ""),
+                labels=node.get("labels", []),
+                summary=node.get("summary", ""),
+                attributes=node.get("attributes", {})
             ))
 
         logger.info(f"获取到 {len(result)} 个节点")
@@ -683,58 +678,58 @@ class ZepToolsService:
         """
         logger.info(f"获取图谱 {graph_id} 的所有边...")
 
-        edges = fetch_all_edges(self.client, graph_id)
+        edges = self.client.get_all_edges(graph_id)
 
         result = []
         for edge in edges:
-            edge_uuid = getattr(edge, 'uuid_', None) or getattr(edge, 'uuid', None) or ""
             edge_info = EdgeInfo(
-                uuid=str(edge_uuid) if edge_uuid else "",
-                name=edge.name or "",
-                fact=edge.fact or "",
-                source_node_uuid=edge.source_node_uuid or "",
-                target_node_uuid=edge.target_node_uuid or ""
+                uuid=edge.get("uuid", ""),
+                name=edge.get("name", ""),
+                fact=edge.get("fact", ""),
+                source_node_uuid=edge.get("source_node_uuid", ""),
+                target_node_uuid=edge.get("target_node_uuid", "")
             )
 
             # 添加时间信息
             if include_temporal:
-                edge_info.created_at = getattr(edge, 'created_at', None)
-                edge_info.valid_at = getattr(edge, 'valid_at', None)
-                edge_info.invalid_at = getattr(edge, 'invalid_at', None)
-                edge_info.expired_at = getattr(edge, 'expired_at', None)
+                edge_info.created_at = edge.get("created_at")
+                edge_info.valid_at = edge.get("valid_at")
+                edge_info.invalid_at = edge.get("invalid_at")
+                edge_info.expired_at = edge.get("expired_at")
 
             result.append(edge_info)
 
         logger.info(f"获取到 {len(result)} 条边")
         return result
     
-    def get_node_detail(self, node_uuid: str) -> Optional[NodeInfo]:
+    def get_node_detail(self, graph_id: str, node_uuid: str) -> Optional[NodeInfo]:
         """
         获取单个节点的详细信息
-        
+
         Args:
+            graph_id: 图谱ID
             node_uuid: 节点UUID
-            
+
         Returns:
             节点信息或None
         """
         logger.info(f"获取节点详情: {node_uuid[:8]}...")
-        
+
         try:
             node = self._call_with_retry(
-                func=lambda: self.client.graph.node.get(uuid_=node_uuid),
+                func=lambda: self.client.get_node(graph_id=graph_id, node_uuid=node_uuid),
                 operation_name=f"获取节点详情(uuid={node_uuid[:8]}...)"
             )
-            
+
             if not node:
                 return None
-            
+
             return NodeInfo(
-                uuid=getattr(node, 'uuid_', None) or getattr(node, 'uuid', ''),
-                name=node.name or "",
-                labels=node.labels or [],
-                summary=node.summary or "",
-                attributes=node.attributes or {}
+                uuid=node.uuid,
+                name=node.name,
+                labels=node.labels,
+                summary=node.summary,
+                attributes=node.attributes
             )
         except Exception as e:
             logger.error(f"获取节点详情失败: {str(e)}")

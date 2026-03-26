@@ -1,4 +1,8 @@
 """
+DEPRECATED: Use graph_client.py and graphiti_adapter.py instead.
+Kept for backward compatibility with GRAPH_BACKEND=zep.
+Will be removed in a future version.
+
 ZepAdapter — OSS/Cloud 兼容层。
 
 自托管 Zep OSS 不支持以下 4 个 Cloud 专属 API：
@@ -129,7 +133,7 @@ class ZepAdapter:
         from zep_cloud.client import Zep
         from .zep_adapter import ZepAdapter
 
-        client = ZepAdapter(Zep(api_url="http://localhost:8000", api_key="local"))
+        client = ZepAdapter(Zep(base_url="http://localhost:8000", api_key="local"))
         # 所有调用与原始 Zep 客户端一致
     """
 

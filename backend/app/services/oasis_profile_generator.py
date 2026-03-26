@@ -18,7 +18,7 @@ from datetime import datetime
 from openai import OpenAI
 
 from ..config import Config
-from ..utils.zep_client import make_zep_client
+from ..utils.graph_client import make_graph_client
 from ..utils.logger import get_logger
 from .zep_entity_reader import EntityNode, ZepEntityReader
 
@@ -201,11 +201,10 @@ class OasisProfileGenerator:
         self.zep_client = None
         self.graph_id = graph_id
 
-        if zep_api_key or Config.ZEP_API_KEY or Config.ZEP_API_URL:
-            try:
-                self.zep_client = make_zep_client(api_key=zep_api_key)
-            except Exception as e:
-                logger.warning(f"Zep客户端初始化失败: {e}")
+        try:
+            self.zep_client = make_graph_client()
+        except Exception as e:
+            logger.warning(f"图谱客户端初始化失败: {e}")
     
     def generate_profile_from_entity(
         self, 
@@ -322,12 +321,10 @@ class OasisProfileGenerator:
             
             for attempt in range(max_retries):
                 try:
-                    return self.zep_client.graph.search(
-                        query=comprehensive_query,
+                    return self.zep_client.search(
                         graph_id=self.graph_id,
+                        query=comprehensive_query,
                         limit=30,
-                        scope="edges",
-                        reranker="rrf"
                     )
                 except Exception as e:
                     last_exception = e
@@ -347,12 +344,10 @@ class OasisProfileGenerator:
             
             for attempt in range(max_retries):
                 try:
-                    return self.zep_client.graph.search(
-                        query=comprehensive_query,
+                    return self.zep_client.search(
                         graph_id=self.graph_id,
+                        query=comprehensive_query,
                         limit=20,
-                        scope="nodes",
-                        reranker="rrf"
                     )
                 except Exception as e:
                     last_exception = e

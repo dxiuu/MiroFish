@@ -14,7 +14,7 @@ from queue import Queue, Empty
 
 from ..config import Config
 from ..utils.logger import get_logger
-from ..utils.zep_client import make_zep_client
+from ..utils.graph_client import make_graph_client
 
 logger = get_logger('mirofish.zep_graph_memory_updater')
 
@@ -230,13 +230,13 @@ class ZepGraphMemoryUpdater:
     def __init__(self, graph_id: str, api_key: Optional[str] = None):
         """
         初始化更新器
-        
+
         Args:
-            graph_id: Zep图谱ID
-            api_key: Zep API Key（可选，默认从配置读取）
+            graph_id: 图谱ID
+            api_key: API Key（可选，默认从配置读取）
         """
         self.graph_id = graph_id
-        self.client = make_zep_client(api_key=api_key)
+        self.client = make_graph_client()
         
         # 活动队列
         self._activity_queue: Queue = Queue()
@@ -399,25 +399,25 @@ class ZepGraphMemoryUpdater:
         # 带重试的发送
         for attempt in range(self.MAX_RETRIES):
             try:
-                self.client.graph.add(
+                self.client.add_episode(
                     graph_id=self.graph_id,
-                    type="text",
-                    data=combined_text
+                    episode_text=combined_text,
+                    episode_name=f"{platform}_{self.graph_id[:8]}"
                 )
-                
+
                 self._total_sent += 1
                 self._total_items_sent += len(activities)
                 display_name = self._get_platform_display_name(platform)
                 logger.info(f"成功批量发送 {len(activities)} 条{display_name}活动到图谱 {self.graph_id}")
                 logger.debug(f"批量内容预览: {combined_text[:200]}...")
                 return
-                
+
             except Exception as e:
                 if attempt < self.MAX_RETRIES - 1:
-                    logger.warning(f"批量发送到Zep失败 (尝试 {attempt + 1}/{self.MAX_RETRIES}): {e}")
+                    logger.warning(f"批量发送失败 (尝试 {attempt + 1}/{self.MAX_RETRIES}): {e}")
                     time.sleep(self.RETRY_DELAY * (attempt + 1))
                 else:
-                    logger.error(f"批量发送到Zep失败，已重试{self.MAX_RETRIES}次: {e}")
+                    logger.error(f"批量发送失败，已重试{self.MAX_RETRIES}次: {e}")
                     self._failed_count += 1
     
     def _flush_remaining(self):

@@ -1,43 +1,91 @@
 services:
   zep:
-    image: ghcr.io/getzep/zep:latest
+    image: zepai/zep:latest
     container_name: mirofish-zep
-    environment:
-      - ZEP_STORE_POSTGRES_DSN=postgres://zep:zep@zep-postgres:5432/zep?sslmode=disable
-      - ZEP_AUTH_REQUIRED=false
-      # Zep uses an LLM internally for knowledge graph extraction.
-      # Point it at the same LLM you use for MiroFish.
-      - ZEP_LLM_SERVICE=openai
-      - ZEP_OPENAI_API_KEY=${LLM_API_KEY}
-      - ZEP_OPENAI_API_BASE=${LLM_BASE_URL}
-      - ZEP_NLP_SERVER_URL=http://zep-nlp:5557
     ports:
       - "8000:8000"
+    volumes:
+      - ./zep-config.yaml:/app/zep.yaml
+    environment:
+      - ZEP_CONFIG_FILE=zep.yaml
+    networks:
+      - zep-network
     depends_on:
-      zep-postgres:
+      graphiti:
+        condition: service_healthy
+      db:
         condition: service_healthy
     restart: unless-stopped
 
-  zep-nlp:
-    image: ghcr.io/getzep/zep-nlp-server:latest
-    container_name: mirofish-zep-nlp
+  graphiti:
+    image: zepai/graphiti:0.3
+    container_name: mirofish-graphiti
+    ports:
+      - "8003:8003"
+    networks:
+      - zep-network
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8003/healthcheck')"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+    depends_on:
+      neo4j:
+        condition: service_healthy
+    environment:
+      - OPENAI_API_KEY=${LLM_API_KEY}
+      - OPENAI_BASE_URL=${LLM_BASE_URL}
+      - MODEL_NAME=${LLM_MODEL_NAME}
+      - NEO4J_URI=bolt://neo4j:7687
+      - NEO4J_USER=neo4j
+      - NEO4J_PASSWORD=zepzepzep
+      - PORT=8003
     restart: unless-stopped
 
-  zep-postgres:
-    image: postgres:15
-    container_name: mirofish-zep-postgres
-    environment:
-      - POSTGRES_USER=zep
-      - POSTGRES_PASSWORD=zep
-      - POSTGRES_DB=zep
-    volumes:
-      - zep_postgres_data:/var/lib/postgresql/data
+  neo4j:
+    image: neo4j:5.22.0
+    container_name: mirofish-neo4j
+    networks:
+      - zep-network
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U zep"]
+      test: wget http://localhost:7687 || exit 1
+      interval: 1s
+      timeout: 10s
+      retries: 20
+      start_period: 3s
+    ports:
+      - "7474:7474"
+      - "7687:7687"
+    volumes:
+      - neo4j_data:/data
+    environment:
+      - NEO4J_AUTH=neo4j/zepzepzep
+    restart: unless-stopped
+
+  db:
+    image: ankane/pgvector:v0.5.1
+    container_name: mirofish-zep-postgres
+    shm_size: "128mb"
+    environment:
+      - POSTGRES_USER=postgres
+      - POSTGRES_PASSWORD=postgres
+    networks:
+      - zep-network
+    healthcheck:
+      test: ["CMD", "pg_isready", "-q", "-d", "postgres", "-U", "postgres"]
       interval: 5s
       timeout: 5s
       retries: 5
+    volumes:
+      - zep-db:/var/lib/postgresql/data
+    ports:
+      - "5432:5432"
     restart: unless-stopped
 
+networks:
+  zep-network:
+    driver: bridge
+
 volumes:
-  zep_postgres_data:
+  neo4j_data:
+  zep-db:

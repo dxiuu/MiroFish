@@ -9,8 +9,7 @@ from dataclasses import dataclass, field
 
 from ..config import Config
 from ..utils.logger import get_logger
-from ..utils.zep_client import make_zep_client
-from ..utils.zep_paging import fetch_all_nodes, fetch_all_edges
+from ..utils.graph_client import make_graph_client
 
 logger = get_logger('mirofish.zep_entity_reader')
 
@@ -78,7 +77,7 @@ class ZepEntityReader:
     """
     
     def __init__(self, api_key: Optional[str] = None):
-        self.client = make_zep_client(api_key=api_key)
+        self.client = make_graph_client()
     
     def _call_with_retry(
         self, 
@@ -131,16 +130,16 @@ class ZepEntityReader:
         """
         logger.info(f"获取图谱 {graph_id} 的所有节点...")
 
-        nodes = fetch_all_nodes(self.client, graph_id)
+        nodes = self.client.get_all_nodes(graph_id)
 
         nodes_data = []
         for node in nodes:
             nodes_data.append({
-                "uuid": getattr(node, 'uuid_', None) or getattr(node, 'uuid', ''),
-                "name": node.name or "",
-                "labels": node.labels or [],
-                "summary": node.summary or "",
-                "attributes": node.attributes or {},
+                "uuid": node.get("uuid", ""),
+                "name": node.get("name", ""),
+                "labels": node.get("labels", []),
+                "summary": node.get("summary", ""),
+                "attributes": node.get("attributes", {}),
             })
 
         logger.info(f"共获取 {len(nodes_data)} 个节点")
@@ -158,17 +157,17 @@ class ZepEntityReader:
         """
         logger.info(f"获取图谱 {graph_id} 的所有边...")
 
-        edges = fetch_all_edges(self.client, graph_id)
+        edges = self.client.get_all_edges(graph_id)
 
         edges_data = []
         for edge in edges:
             edges_data.append({
-                "uuid": getattr(edge, 'uuid_', None) or getattr(edge, 'uuid', ''),
-                "name": edge.name or "",
-                "fact": edge.fact or "",
-                "source_node_uuid": edge.source_node_uuid,
-                "target_node_uuid": edge.target_node_uuid,
-                "attributes": edge.attributes or {},
+                "uuid": edge.get("uuid", ""),
+                "name": edge.get("name", ""),
+                "fact": edge.get("fact", ""),
+                "source_node_uuid": edge.get("source_node_uuid", ""),
+                "target_node_uuid": edge.get("target_node_uuid", ""),
+                "attributes": edge.get("attributes", {}),
             })
 
         logger.info(f"共获取 {len(edges_data)} 条边")
@@ -186,10 +185,14 @@ class ZepEntityReader:
         """
         try:
             # 使用重试机制调用Zep API
-            edges = self._call_with_retry(
-                func=lambda: self.client.graph.node.get_entity_edges(node_uuid=node_uuid),
-                operation_name=f"获取节点边(node={node_uuid[:8]}...)"
-            )
+            if hasattr(self.client, 'graph'):
+                edges = self._call_with_retry(
+                    func=lambda: self.client.graph.node.get_entity_edges(node_uuid=node_uuid),
+                    operation_name=f"获取节点边(node={node_uuid[:8]}...)"
+                )
+            else:
+                edges = self.client.get_all_edges(self.graph_id) if hasattr(self, 'graph_id') else []
+                edges = [e for e in edges if e.get('source_node_uuid') == node_uuid or e.get('target_node_uuid') == node_uuid]
             
             edges_data = []
             for edge in edges:
@@ -342,10 +345,13 @@ class ZepEntityReader:
         """
         try:
             # 使用重试机制获取节点
-            node = self._call_with_retry(
-                func=lambda: self.client.graph.node.get(uuid_=entity_uuid),
-                operation_name=f"获取节点详情(uuid={entity_uuid[:8]}...)"
-            )
+            if hasattr(self.client, 'graph'):
+                node = self._call_with_retry(
+                    func=lambda: self.client.graph.node.get(uuid_=entity_uuid),
+                    operation_name=f"获取节点详情(uuid={entity_uuid[:8]}...)"
+                )
+            else:
+                node = self.client.get_node(graph_id, entity_uuid)
             
             if not node:
                 return None
